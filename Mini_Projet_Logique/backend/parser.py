@@ -47,6 +47,9 @@ def parser_formule(texte):
         r"Equivalent(\1, \2)",
         texte_propre
     )
+    for mot in re.findall(r"\b[A-Za-z_]\w*\b", texte_propre):
+        if mot != "Equivalent" and mot not in symboles:
+            symboles[mot] = Symbol(mot)
 
     symboles["Equivalent"] = Equivalent
 
