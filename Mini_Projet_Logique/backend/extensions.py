@@ -1,5 +1,6 @@
 from .logic import deduit, est_consistant_avec, est_coherent
 
+
 def prerequis_satisfait(E, defaut):
     # un defaut sans prerequis est toujours applicable
     if not defaut.prerequis:
@@ -30,22 +31,39 @@ def appliquer_defaut(E, defaut):
 
 
 def verifier_extension(E, defauts_appliques):
-    # condition du point fixe les justifications doivent rester valides dans E final
+    # condition du point fixe : les justifications doivent rester valides dans E final
     for defaut in defauts_appliques:
         if not justifications_valides(E, defaut):
             return False
     return True
 
 
+def sont_equivalents(E1, E2):
+    # deux ensembles sont équivalents si chacun déduit toutes les formules de l'autre
+    return all(deduit(E1, f) for f in E2) and all(deduit(E2, f) for f in E1)
+
+
 def calculer_extensions(base):
+    # Cas limite : si W est incohérent, la théorie de Reiter donne une extension
+    # formée de TOUTES les formules. On ne sait pas la représenter : on renvoie [].
     if not est_coherent(base.facts):
         return []
 
     extensions = []
-    signatures_vues = set()
+    etats_vus = set()  # ensembles de défauts déjà explorés
     E_initial = base.facts.copy()
 
+    def deja_trouvee(E):
+        return any(sont_equivalents(E, ext) for ext in extensions)
+
     def explorer(E, indices_appliques, defauts_appliques):
+        # Le même ensemble de défauts appliqués donne le même E, quel que soit
+        # l'ordre : inutile de l'explorer deux fois (on passe de n! à 2^n cas).
+        cle = frozenset(indices_appliques)
+        if cle in etats_vus:
+            return
+        etats_vus.add(cle)
+
         defauts_disponibles = []
 
         for i, defaut in enumerate(base.defauts):
@@ -54,13 +72,10 @@ def calculer_extensions(base):
             if defaut_applicable(E, defaut):
                 defauts_disponibles.append((i, defaut))
 
-        # si plus aucun defaut nest applicable on valide et enregistre lextension
+        # si plus aucun defaut n'est applicable on valide et enregistre l'extension
         if not defauts_disponibles:
-            if verifier_extension(E, defauts_appliques):
-                signature = frozenset(E)
-                if signature not in signatures_vues:
-                    signatures_vues.add(signature)
-                    extensions.append(E.copy())
+            if verifier_extension(E, defauts_appliques) and not deja_trouvee(E):
+                extensions.append(E.copy())
             return
 
         # explorer chaque branche d'application possible
@@ -73,11 +88,7 @@ def calculer_extensions(base):
             nouveaux_defauts = defauts_appliques.copy()
             nouveaux_defauts.append(defaut)
 
-            explorer(
-                nouvel_E,
-                nouveaux_indices,
-                nouveaux_defauts
-            )
+            explorer(nouvel_E, nouveaux_indices, nouveaux_defauts)
 
     explorer(E_initial, set(), [])
     return extensions
