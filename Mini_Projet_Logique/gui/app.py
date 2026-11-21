@@ -2,6 +2,7 @@
 
 Installation :  pip install customtkinter sympy
 """
+import tkinter as tk
 import customtkinter as ctk
 from tkinter import messagebox, filedialog
 
@@ -12,10 +13,15 @@ from backend.extensions import calculer_extensions
 from backend.inference import (
     est_consequence_sceptique, est_consequence_credule, litteraux,
 )
+from backend.comparaison import comparer_ajout_fait
+from backend.schema import (
+    MAX_CERCLES, intersection_litteraux, regions_diagramme, geometrie, position_region,
+)
 from backend.storage import sauvegarder, charger, base_depuis_textes
 from backend.exemples import EXEMPLES
 
 TYPES_FICHIER = [("Théorie (JSON)", "*.json"), ("Tous les fichiers", "*.*")]
+COULEURS_CERCLES = ["#4F46E5", "#DC2626", "#059669", "#D97706", "#7C3AED"]   # un cercle = une couleur
 
 
 ACCENT = "#4F46E5"
@@ -210,6 +216,8 @@ class Application(ctk.CTk):
 
         bouton_principal(barre, "▶  Générer les extensions", self.generer_extensions).grid(
             row=0, column=0, padx=14, pady=12)
+        bouton_secondaire(barre, "◎  Schéma des extensions", self.montrer_schema).grid(
+            row=1, column=0, padx=14, pady=(0, 12))
         ctk.CTkLabel(barre, text="Formule φ", text_color=TEXTE_DISCRET).grid(
             row=0, column=1, padx=(14, 6))
         self.entree_phi = self._entree(barre, "ex.  P")
@@ -219,6 +227,15 @@ class Application(ctk.CTk):
                           width=110).grid(row=0, column=3, padx=(10, 4))
         bouton_secondaire(barre, "Crédule ?", lambda: self.tester("crédule"),
                           width=110).grid(row=0, column=4, padx=(4, 14))
+
+        # Deuxième ligne : « Et si j'ajoute ce fait ? » (essai sans modifier W)
+        ctk.CTkLabel(barre, text="Et si j'ajoute", text_color=TEXTE_DISCRET).grid(
+            row=1, column=1, padx=(14, 6), pady=(0, 12))
+        self.entree_hypothese = self._entree(barre, "ex.  Pingouin")
+        self.entree_hypothese.grid(row=1, column=2, sticky="ew", pady=(0, 12))
+        self.entree_hypothese.bind("<Return>", lambda e: self.et_si())
+        bouton_principal(barre, "Et si ? (comparer)", self.et_si, width=232).grid(
+            row=1, column=3, columnspan=2, padx=(10, 14), pady=(0, 12))
 
     def _zone_resultats(self):
         carte = ctk.CTkFrame(self, corner_radius=16, fg_color=FOND_CARTE,
@@ -417,6 +434,116 @@ class Application(ctk.CTk):
         self.ajouter_titre(f"{n} extension{'s' if n > 1 else ''} trouvée{'s' if n > 1 else ''}")
         for numero, extension in enumerate(self.extensions, 1):
             self.ajouter_carte_extension(numero, extension)
+
+    def montrer_schema(self):
+        """Dessine chaque extension comme un cercle ; l'intersection de tous = sceptique."""
+        if self.extensions is None:
+            messagebox.showwarning("Extensions", "Générez d'abord les extensions.")
+            return
+        self.effacer_resultats()
+        self.ajouter_titre("Schéma des extensions")
+        if not self.extensions:
+            self.ajouter_message("Aucune extension : il n'y a rien à dessiner.", "alerte")
+            return
+        if len(self.extensions) > MAX_CERCLES:
+            self.ajouter_message(f"Le schéma est limité à {MAX_CERCLES} extensions "
+                                 f"({len(self.extensions)} trouvées).", "alerte")
+            return
+        listes = [litteraux(e) for e in self.extensions]
+        self.dessiner_schema(listes)
+        commun = intersection_litteraux(listes)
+        self.ajouter_message("Intersection de tous les cercles = conséquences sceptiques : "
+                             + (", ".join(commun) or "aucune"), "ok")
+        if len(listes) > 1:
+            self.ajouter_message("Un littéral qui n'est que dans certains cercles est seulement "
+                                 "une conséquence crédule.", "info")
+
+    def dessiner_schema(self, listes):
+        largeur, hauteur = 860, 420
+        canvas = tk.Canvas(self.zone_res, width=largeur, height=hauteur, bg="#FFFFFF",
+                           highlightthickness=1, highlightbackground="#E5E7EB")
+        canvas.pack(pady=6)
+        milieu = (largeur / 2, hauteur / 2)
+        rayon, centres, etiquettes = geometrie(len(listes), largeur, hauteur)
+
+        for i, ((x, y), (ex, ey)) in enumerate(zip(centres, etiquettes)):
+            couleur = COULEURS_CERCLES[i % len(COULEURS_CERCLES)]
+            canvas.create_oval(x - rayon, y - rayon, x + rayon, y + rayon,
+                               outline=couleur, width=3)
+            canvas.create_text(ex, ey, text=f"E{i + 1}", fill=couleur,
+                               font=("Segoe UI", 14, "bold"))
+
+        interligne = 18
+        for cle, lits in regions_diagramme(listes).items():
+            x, y = position_region(cle, centres, milieu, rayon)
+            haut = y - interligne * (len(lits) - 1) / 2
+            for k, lit in enumerate(lits):
+                couleur = "#991B1B" if lit.startswith("~") else "#166534"
+                canvas.create_text(x, haut + k * interligne, text=lit, fill=couleur,
+                                   font=("Consolas", 13, "bold"))
+
+        self.journal.append("Schéma : " + " | ".join(
+            f"E{i + 1} = {{{', '.join(l)}}}" for i, l in enumerate(listes)))
+        self._defiler_en_bas()
+
+    def et_si(self):
+        """« Et si j'ajoute ce fait ? » : compare les extensions avant / après, sans toucher à W."""
+        fait = self.entree_hypothese.get().strip()
+        if not fait:
+            messagebox.showwarning("Et si ?", "Saisissez le fait à essayer.")
+            return
+        self._occupe(True)
+        try:
+            comp = comparer_ajout_fait(self.base, fait)
+        except ValueError as erreur:
+            messagebox.showerror("Formule incorrecte", str(erreur))
+            return
+        except Exception as erreur:   # sécurité : l'application ne doit pas planter
+            messagebox.showerror("Erreur de calcul", str(erreur))
+            return
+        finally:
+            self._occupe(False)
+        self.afficher_comparaison(comp)
+
+    def _afficher_liste_extensions(self, titre, extensions):
+        n = len(extensions)
+        self.ajouter_titre(f"{titre} : {n} extension{'s' if n > 1 else ''}")
+        if not extensions:
+            self.ajouter_message("Aucune extension.", "alerte")
+        for numero, extension in enumerate(extensions, 1):
+            self.ajouter_carte_extension(numero, extension)
+
+    def afficher_comparaison(self, comp):
+        self.effacer_resultats()
+        self.ajouter_titre(f"Et si j'ajoute « {comp.fait} » ?")
+        self._afficher_liste_extensions("Avant", comp.avant)
+        self._afficher_liste_extensions("Après", comp.apres)
+
+        self.ajouter_titre("Bilan")
+        if comp.incoherent_apres:
+            self.ajouter_message("Avec ce fait, W devient INCOHÉRENT : "
+                                 "aucune extension n'est représentable.", "alerte")
+
+        def liste(valeurs):
+            return ", ".join(valeurs)
+
+        if comp.credules_perdus:
+            self.ajouter_message("Plus crédules (ne se déduisent plus dans aucune extension) : "
+                                 + liste(comp.credules_perdus), "alerte")
+        if comp.sceptiques_perdus:
+            self.ajouter_message("Plus sceptiques (ne se déduisent plus dans toutes les extensions) : "
+                                 + liste(comp.sceptiques_perdus), "alerte")
+        if comp.credules_gagnes:
+            self.ajouter_message("Nouvelles conclusions crédules : " + liste(comp.credules_gagnes), "ok")
+        if comp.sceptiques_gagnes:
+            self.ajouter_message("Nouvelles conclusions sceptiques : " + liste(comp.sceptiques_gagnes), "ok")
+
+        if comp.non_monotone:
+            self.ajouter_message("Raisonnement non monotone : ajouter ce fait a RETIRÉ des conclusions. "
+                                 "(W n'a pas été modifié : utilisez « Ajouter » pour le garder.)", "info")
+        else:
+            self.ajouter_message("Aucune conclusion retirée par cet ajout. "
+                                 "(W n'a pas été modifié : utilisez « Ajouter » pour le garder.)", "info")
 
     def tester(self, mode):
         """mode = « sceptique » ou « crédule »."""
